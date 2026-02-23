@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   initializeFirestoreSQLite,
   getFirestore,
@@ -9,7 +9,7 @@ import {
   deleteDoc,
   query,
   orderBy
-} from './lib/firestore-sqlite';
+} from '../../src/lib/firestore-sqlite';
 import './App.css';
 
 function App() {
@@ -97,7 +97,7 @@ function App() {
 
   return (
     <div className="container">
-      <h1>Firestore API via OPFS wa-sqlite</h1>
+      <h1>Firestore API via OPFS wa-sqlite (Original App)</h1>
       {error && <div className="error">{error}</div>}
 
       <div className="form-section">
