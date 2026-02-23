@@ -2,7 +2,8 @@ import * as Comlink from 'comlink';
 import SQLiteAsyncESMFactory from 'wa-sqlite/dist/wa-sqlite-async.mjs';
 import * as SQLite from 'wa-sqlite';
 import { OriginPrivateFileSystemVFS } from 'wa-sqlite/src/examples/OriginPrivateFileSystemVFS.js';
-import wasmUrl from 'wa-sqlite/dist/wa-sqlite-async.wasm?url';
+// The wasm binary will be copied next to the emitted worker during the lib build.
+const wasmUrl = new URL('./wa-sqlite-async.wasm', import.meta.url).toString();
 import { applyPatch } from 'rfc6902';
 
 let sqlite3: ReturnType<typeof SQLite.Factory> | undefined;
