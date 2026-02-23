@@ -32,7 +32,9 @@
     "mitt": "^3.0.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "rfc6902": "^5.1.2",
+    "rfc6902": "^5.1.2"
+  },
+  "peerDependencies": {
     "wa-sqlite": "^1.0.0"
   },
   "devDependencies": {
@@ -49,6 +51,7 @@
     "typescript-eslint": "^8.48.0",
     "tsup": "^8.5.1",
     "vite": "^7.3.1",
-    "esbuild": "^0.19.0"
+    "esbuild": "^0.19.0",
+    "wa-sqlite": "^1.0.0"
   }
 }

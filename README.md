@@ -1,30 +1,36 @@
 
 ## firesqlite
 
-`firesqlite` provides a small Firestore-like API backed by `wa-sqlite` and OPFS.
-It exposes a familiar surface (initialize, `collection`/`doc`, queries, and
-`onSnapshot`) so you can prototype Firestore-style code that persistence in the
-browser's OPFS via `wa-sqlite`.
+### firesqlite
+
+`firesqlite` provides a small Firestore-like API backed by `wa-sqlite` and
+OPFS. It exposes a familiar surface (initialize, `collection`/`doc`, queries,
+and `onSnapshot`) so you can prototype Firestore-style code persisted in the
+browser's OPFS using `wa-sqlite`.
 
 Quick start
 -----------
 
-Install (for consuming as a package):
+Install (consumer):
 
+```bash
+npm install firesqlite wa-sqlite
 ```
-npm install firesqlite
-```
+
+Note: `wa-sqlite` is a peer dependency. Consumers must install it alongside
+`firesqlite` (this keeps the published package small and lets apps pick the
+appropriate `wa-sqlite` version/packaging).
 
 Build locally (library):
 
-```
+```bash
 npm run build:lib
 ```
 
 Run the example app (dev server):
 
-```
-npx vite example
+```bash
+npm run dev -- --config example/vite.config.js
 ```
 
 API overview
@@ -54,156 +60,78 @@ await initializeFirestoreSQLite('my-db-name');
 const db = getFirestore();
 ```
 
-Simple query example
---------------------
+Browser / Next.js (SSR) notes
+----------------------------
 
-```ts
-const kv = collection(db, 'kv_store');
-const q = query(kv, orderBy('key', 'asc'));
-const snapshot = await getDocs(q);
-const rows = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+Because `firesqlite` depends on a wasm-backed worker, you should only import
+and initialize it on the client (browser) runtime. Two common patterns:
+
+- Dynamic import inside an effect (recommended for React):
+
+```tsx
+useEffect(() => {
+  (async () => {
+    const lib = await import('firesqlite');
+    await lib.initializeFirestoreSQLite();
+    // use lib.* after init
+  })();
+}, []);
 ```
 
-Snapshot example (real-time-like)
---------------------------------
+- Use `next/dynamic` to prevent SSR bundling of the component that uses
+  `firesqlite`:
 
 ```ts
-const unsub = onSnapshot(q, snapshot => {
-  const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-  console.log('snapshot', items);
-});
+import dynamic from 'next/dynamic';
 
-// later when you want to stop listening
-unsub();
+const ClientOnlyApp = dynamic(() => import('./PosApp'), { ssr: false });
 ```
 
-CRUD helpers
-------------
+If a consumer app uses Next/Turbopack and still wants to import the module
+statically, they can opt into transpiling the peer package(s) so the bundler
+processes them correctly:
 
-```ts
-// set / upsert
-await setDoc(doc(db, 'kv_store', 'myKey'), { value: 'hello' });
-
-// delete
-await deleteDoc(doc(db, 'kv_store', 'myKey'));
+```js
+// next.config.js
+module.exports = {
+  transpilePackages: ['wa-sqlite', 'firesqlite'],
+};
 ```
 
-Notes
------
+Build & packaging notes
+-----------------------
 
-- The package builds both ESM (`dist/index.js`) and CJS (`dist/index.cjs`).
-- Worker code uses `import.meta.url` and works best for ESM consumers. CJS
-  consumers may receive an empty `import.meta` value for worker-related paths.
-- See `example/` for a working demo of the UI and the worker integration.
-
-Contributing
-------------
-
-Persistence implementation
--------------------------
-
-Internally `firesqlite` uses `wa-sqlite` and an OPFS-backed VFS to persist
-documents in the browser. Key implementation details:
-
-- The worker (`src/lib/firestore-sqlite/worker.ts`) initializes `wa-sqlite`
-  and registers `OriginPrivateFileSystemVFS` so the SQLite file lives in the
-  Origin Private File System (OPFS).
-- Documents are stored in a table named `documents` with schema:
-
-  ```sql
-  CREATE TABLE IF NOT EXISTS documents (
-    collection_id TEXT,
-    doc_id TEXT,
-    data TEXT,
-    PRIMARY KEY (collection_id, doc_id)
-  )
-  ```
-
-- Document JSON is stored as stringified JSON in the `data` column. Queries
-  use SQLite's `json_extract` and `json_each` helpers to evaluate fields and
-  array-contains semantics.
-- Indexes are created via `createIndex()` which creates SQLite indexes on
-  `json_extract(data, '$.<field>')` limited to the collection via a WHERE
-  clause.
-- Batches are executed inside a transaction using `BEGIN TRANSACTION` /
-  `COMMIT` / `ROLLBACK` so multiple operations are atomic.
-- The library exposes a lightweight event emitter (internal `mitt` instance)
-  that notifies listeners when collections change. `onSnapshot()` subscribes
-  to these events and transforms rows into a Firestore-like snapshot with
-  `docs` and `docChanges()`.
-- Special helpers: `serverTimestamp()` is supported and expanded on write to
-  an ISO timestamp; `expandDotNotation()` supports field paths like
-  `a.b.c` when writing.
+- The library ships compiled ESM in `dist/` and emits a bundled worker in
+  `dist/lib/firestore-sqlite/worker.js`. The wasm binary is copied next to
+  the worker during `npm run build:lib` so consumers don't need to resolve
+  `wa-sqlite` internals at app build time.
+- If you prefer a single-file distribution (no separate wasm), consider
+  inlining the wasm into the worker (tradeoff: larger JS file). Contact the
+  maintainers if you need that option.
 
 Examples
 --------
 
-See the `example/` app for a working demonstration of the UI and the worker
-integration. The library docs and code examples above show how to initialize
-the DB, query, and subscribe to snapshots.
+See the `example/` app for a working demonstration of the UI and worker
+integration. The code examples above show how to initialize the DB, query,
+and subscribe to snapshots.
 
+Contributing
+------------
 
-## React Compiler
+See source files under `src/` and `src/lib/firestore-sqlite/` for the runtime
+implementation. Key points:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Worker initialization: `src/lib/firestore-sqlite/worker.ts` initializes
+  `wa-sqlite` and registers `OriginPrivateFileSystemVFS` so the SQLite file
+  lives in the Origin Private File System (OPFS).
+- Documents are stored in a `documents` table and JSON is stored in a `data`
+  column. Queries use `json_extract` and `json_each` for JSON querying.
+- `onSnapshot()` uses an internal `mitt` event emitter to provide
+  Firestore-like snapshot semantics.
 
-## Expanding the ESLint configuration
+License
+-------
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+MIT
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
