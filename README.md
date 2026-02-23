@@ -99,14 +99,48 @@ Notes
 Contributing
 ------------
 
-Run the example while developing and open the browser at the Vite URL:
+Persistence implementation
+-------------------------
 
-```bash
-npx vite example
-```
+Internally `firesqlite` uses `wa-sqlite` and an OPFS-backed VFS to persist
+documents in the browser. Key implementation details:
 
-If you want me to add automated CI for building and publishing, tell me and
-I'll scaffold a GitHub Actions workflow.
+- The worker (`src/lib/firestore-sqlite/worker.ts`) initializes `wa-sqlite`
+  and registers `OriginPrivateFileSystemVFS` so the SQLite file lives in the
+  Origin Private File System (OPFS).
+- Documents are stored in a table named `documents` with schema:
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS documents (
+    collection_id TEXT,
+    doc_id TEXT,
+    data TEXT,
+    PRIMARY KEY (collection_id, doc_id)
+  )
+  ```
+
+- Document JSON is stored as stringified JSON in the `data` column. Queries
+  use SQLite's `json_extract` and `json_each` helpers to evaluate fields and
+  array-contains semantics.
+- Indexes are created via `createIndex()` which creates SQLite indexes on
+  `json_extract(data, '$.<field>')` limited to the collection via a WHERE
+  clause.
+- Batches are executed inside a transaction using `BEGIN TRANSACTION` /
+  `COMMIT` / `ROLLBACK` so multiple operations are atomic.
+- The library exposes a lightweight event emitter (internal `mitt` instance)
+  that notifies listeners when collections change. `onSnapshot()` subscribes
+  to these events and transforms rows into a Firestore-like snapshot with
+  `docs` and `docChanges()`.
+- Special helpers: `serverTimestamp()` is supported and expanded on write to
+  an ISO timestamp; `expandDotNotation()` supports field paths like
+  `a.b.c` when writing.
+
+Examples
+--------
+
+See the `example/` app for a working demonstration of the UI and the worker
+integration. The library docs and code examples above show how to initialize
+the DB, query, and subscribe to snapshots.
 
 
 ## React Compiler
