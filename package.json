@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "build:lib": "tsup && node scripts/build-worker.cjs && node scripts/copy-wasm.cjs",
+    "build:lib": "tsup",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -51,7 +51,6 @@
     "typescript-eslint": "^8.48.0",
     "tsup": "^8.5.1",
     "vite": "^7.3.1",
-    "esbuild": "^0.19.0",
     "wa-sqlite": "^1.0.0"
   }
 }
