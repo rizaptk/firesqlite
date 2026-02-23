@@ -7,6 +7,8 @@ export default defineConfig({
   sourcemap: false,
   clean: true,
   splitting: false,
+  bundle: true,
+  external: [],
   minify: false,
   outDir: 'dist',
   target: 'es2022'
