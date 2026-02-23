@@ -1,0 +1,12 @@
+node_modules
+backend/node_modules
+backend/dist
+backend/rethinkdb_data
+storage
+public/images/*
+
+.next
+.git
+
+*.log
+npm-debug.log*

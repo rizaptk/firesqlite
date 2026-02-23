@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  entry: {index:'src/index.ts', worker: 'src/lib/firestore-sqlite/worker.ts'},
   format: ['esm'],
   dts: { entry: ['src/index.ts'] },
   sourcemap: false,
@@ -9,5 +9,6 @@ export default defineConfig({
   splitting: false,
   minify: false,
   outDir: 'dist',
-  target: 'es2022'
+  target: 'es2022',
+  noExternal: ['comlink', 'rfc6902', 'wa-sqlite', 'mitt'],
 });

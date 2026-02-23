@@ -1,4 +1,4 @@
-export declare function initializeFirestoreSQLite(dbName?: string): Promise<void>;
+export declare function initializeFirestoreSQLite(wasmUrl?: string, dbName?: string): Promise<void>;
 export declare const getFirestore: () => any;
 
 export interface CollectionReference {

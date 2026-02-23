@@ -1,25 +1,86 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import * as Comlink from 'comlink';
 import mitt from 'mitt';
 import type { FirestoreWorkerWrapper } from './worker';
 
-let dbWorker: Comlink.Remote<FirestoreWorkerWrapper> | null = null;
-let initializedDatabaseName: string | null = null;
+const WORKER_KEY = '__FIRESTORE_SQLITE_WORKER__';
+const RAW_WORKER_KEY = '__FIRESTORE_SQLITE_RAW__';
+const INIT_PROMISE_KEY = '__FIRESTORE_SQLITE_INIT_PROMISE__';
+const DB_NAME_KEY = '__FIRESTORE_SQLITE_NAME__';
+const WASM_URL_KEY = '__FIRESTORE_WASM_URL__';
 
-export async function initializeFirestoreSQLite(dbName = 'firestore-sqlite.db'): Promise<void> {
-    if (!dbWorker) {
-        // Must use new URL with import.meta.url for Vite worker loading
-        dbWorker = Comlink.wrap<FirestoreWorkerWrapper>(
-            new Worker(new URL('./lib/firestore-sqlite/worker.js', import.meta.url), { type: 'module' })
-        );
+const terminateAndReset = () => {
+    const g = globalThis as any;
+    if (g[RAW_WORKER_KEY]) g[RAW_WORKER_KEY].terminate();
+    g[WORKER_KEY] = undefined;
+    g[RAW_WORKER_KEY] = undefined;
+    g[INIT_PROMISE_KEY] = undefined;
+};
+
+export async function initializeFirestoreSQLite(wasmUrl?: string, dbName = 'firestore-sqlite.db'): Promise<void> {
+    if (typeof window === 'undefined') return;
+    const g = globalThis as any;
+    if (wasmUrl) g[WASM_URL_KEY] = wasmUrl;
+
+    if (!g[WORKER_KEY]) {
+        const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+        g[RAW_WORKER_KEY] = worker;
+        g[WORKER_KEY] = Comlink.wrap<FirestoreWorkerWrapper>(worker);
     }
-    await dbWorker.init(dbName);
-    initializedDatabaseName = dbName;
+
+    if (!g[INIT_PROMISE_KEY]) {
+        g[INIT_PROMISE_KEY] = (async () => {
+            try {
+                await g[WORKER_KEY].init(dbName, g[WASM_URL_KEY]);
+                g[DB_NAME_KEY] = dbName; 
+            } catch (err) {
+                terminateAndReset();
+                throw err;
+            }
+        })();
+    }
+    return g[INIT_PROMISE_KEY];
 }
 
+/**
+ * Enhanced runSafe: Transparently handles worker crashes.
+ * If a crash occurs, it restarts the worker and retries the call.
+ */
+async function runSafe<T>(task: (api: Comlink.Remote<FirestoreWorkerWrapper>) => Promise<T>, retryCount = 0): Promise<T> {
+    const g = globalThis as any;
+    
+    // Ensure initialized
+    if (!g[INIT_PROMISE_KEY]) await initializeFirestoreSQLite();
+    await g[INIT_PROMISE_KEY];
+
+    const api = g[WORKER_KEY];
+    try {
+        return await task(api);
+    } catch (err: any) {
+        const isCrash = err.message?.includes('WASM_ZOMBIE_STATE') || err.name === 'RuntimeError';
+        
+        if (isCrash && retryCount < 2) {
+            console.warn("Worker crash detected. Auto-restarting and retrying...");
+            terminateAndReset();
+            // Wait for re-initialization
+            await initializeFirestoreSQLite();
+            // Retry the same task
+            return await runSafe(task, retryCount + 1);
+        }
+        throw err;
+    }
+}
+
+// --- Firestore-like API Implementation ---
+
 export const getFirestore = () => {
-    if (!dbWorker) throw new Error('Firestore SQLite not initialized! Call initializeFirestoreSQLite() first.');
-    return { name: initializedDatabaseName }; // mock db object for similarity
+    const g = globalThis as any;
+    if (!g[WORKER_KEY] || !g[DB_NAME_KEY]) {
+        throw new Error('Firestore SQLite not initialized! Call initializeFirestoreSQLite() first.');
+    }
+    return { name: g[DB_NAME_KEY] as string };
 };
+
 
 // References
 export interface CollectionReference {
@@ -112,19 +173,21 @@ const reviveDates = (obj: any): any => {
 export async function setDoc(docRef: DocumentReference, data: Record<string, any>) {
     const processedData = processData(data);
     const expanded = expandDotNotation(processedData);
-    await dbWorker!.execute(
+    
+    await runSafe(async (api) => api.execute(
         `INSERT INTO documents (collection_id, doc_id, data) VALUES (?, ?, ?) 
          ON CONFLICT(collection_id, doc_id) DO UPDATE SET data = excluded.data`,
         [docRef.collectionId, docRef.id, JSON.stringify(expanded)]
-    );
+    ))
+
     dbEvents.emit(docRef.collectionId);
 }
 
 export async function getDoc(docRef: DocumentReference) {
-    const rows = await dbWorker!.execute(
+    const rows = await runSafe(async (api) => api.execute(
         `SELECT data FROM documents WHERE collection_id = ? AND doc_id = ?`,
         [docRef.collectionId, docRef.id]
-    );
+    ));
     if (rows.length > 0) {
         return {
             id: docRef.id,
@@ -136,10 +199,10 @@ export async function getDoc(docRef: DocumentReference) {
 }
 
 export async function deleteDoc(docRef: DocumentReference) {
-    await dbWorker!.execute(
+    await runSafe(async (api) => api.execute(
         `DELETE FROM documents WHERE collection_id = ? AND doc_id = ?`,
         [docRef.collectionId, docRef.id]
-    );
+    ));
     dbEvents.emit(docRef.collectionId);
 }
 
@@ -266,7 +329,7 @@ export async function getDocs(q: Query | CollectionReference | CollectionGroupRe
         bindings.push(limitToLastClause.limit);
     }
 
-    const rows = await dbWorker!.execute(sql, bindings);
+    const rows = await runSafe(async (api) => api.execute(sql, bindings));
 
     if (limitToLastClause) {
         rows.reverse(); // Restore normal order
@@ -325,7 +388,7 @@ export async function getCountFromServer(q: Query | CollectionReference | Collec
         }
     }
 
-    const rows = await dbWorker!.execute(sql, bindings);
+    const rows = await runSafe(async (api) => api.execute(sql, bindings));
     return {
         data: () => ({ count: rows[0].count })
     };
@@ -335,13 +398,14 @@ export async function updateDoc(docRef: DocumentReference, data: Record<string, 
     const processedData = processData(data);
     const expanded = expandDotNotation(processedData);
 
-    await dbWorker!.execute(
+    await runSafe(async (api) => api.execute(
         `UPDATE documents SET data = json_patch(data, ?) WHERE collection_id = ? AND doc_id = ?`,
         [JSON.stringify(expanded), docRef.collectionId, docRef.id]
-    );
+    ));
     dbEvents.emit(docRef.collectionId);
 }
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function writeBatch(_db: any) {
     const operations: { sql: string, bindings: any[], collectionId: string }[] = [];
     let _committed = false;
@@ -377,7 +441,7 @@ export function writeBatch(_db: any) {
             if (_committed) throw new Error("Batch already committed");
             _committed = true;
 
-            await dbWorker!.executeBatch(operations.map(op => ({ sql: op.sql, bindings: op.bindings })));
+            await runSafe(async (api) => api.executeBatch(operations.map(op => ({ sql: op.sql, bindings: op.bindings }))));
 
             const emittedCols = new Set(operations.map(op => op.collectionId));
             emittedCols.forEach(col => dbEvents.emit(col));
@@ -451,5 +515,5 @@ export function onSnapshot(q: Query | CollectionReference | CollectionGroupRefer
 }
 
 export async function createIndex(_db: any, collection: CollectionReference | CollectionGroupReference, field: string) {
-    await dbWorker!.createIndex(collection.id, field);
+    await runSafe(async (api) => api.createIndex(collection.id, field));
 }
