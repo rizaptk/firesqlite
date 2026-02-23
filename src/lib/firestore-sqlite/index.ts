@@ -9,7 +9,7 @@ export async function initializeFirestoreSQLite(dbName = 'firestore-sqlite.db'):
     if (!dbWorker) {
         // Must use new URL with import.meta.url for Vite worker loading
         dbWorker = Comlink.wrap<FirestoreWorkerWrapper>(
-            new Worker(new URL('./worker.ts', import.meta.url), { type: 'module' })
+            new Worker(new URL('./lib/firestore-sqlite/worker.js', import.meta.url), { type: 'module' })
         );
     }
     await dbWorker.init(dbName);

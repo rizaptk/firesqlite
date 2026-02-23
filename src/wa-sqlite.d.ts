@@ -9,7 +9,7 @@ declare module 'wa-sqlite/dist/wa-sqlite-async.wasm?url' {
 }
 
 declare module 'wa-sqlite' {
-  export type SQLiteFactory = (module: any) => {
+  export type SQLiteInstance = {
     vfs_register: (vfs: any, makeDefault?: boolean) => void;
     open_v2: (name: string, flags: number, vfsName?: string) => Promise<number>;
     statements: (db: number, sql: string) => AsyncIterable<any>;
@@ -17,15 +17,14 @@ declare module 'wa-sqlite' {
     step: (stmt: any) => Promise<number>;
     row: (stmt: any) => any[];
     bind_collection: (stmt: any, bindings: any[]) => void;
-    Factory: SQLiteFactory;
   };
 
-  const wasm: any;
-  export default wasm;
+  export function Factory(module: any): SQLiteInstance;
 
   export const SQLITE_OPEN_CREATE: number;
   export const SQLITE_OPEN_READWRITE: number;
   export const SQLITE_OPEN_URI: number;
+  export const SQLITE_ROW: number;
 }
 
 declare module 'wa-sqlite/src/examples/OriginPrivateFileSystemVFS.js' {

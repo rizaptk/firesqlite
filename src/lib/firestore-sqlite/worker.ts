@@ -3,6 +3,7 @@ import SQLiteAsyncESMFactory from 'wa-sqlite/dist/wa-sqlite-async.mjs';
 import * as SQLite from 'wa-sqlite';
 import { OriginPrivateFileSystemVFS } from 'wa-sqlite/src/examples/OriginPrivateFileSystemVFS.js';
 import wasmUrl from 'wa-sqlite/dist/wa-sqlite-async.wasm?url';
+import { applyPatch } from 'rfc6902';
 
 let sqlite3: ReturnType<typeof SQLite.Factory> | undefined;
 let db: number | undefined;
@@ -66,8 +67,7 @@ export const workerAPI = {
         // This is executed on the worker side
         const currentData = JSON.parse(getRes[0].data);
 
-        // Dynamic import to avoid bloating initial worker load
-        const { applyPatch } = await import('rfc6902');
+        // Use applyPatch from rfc6902
         applyPatch(currentData, patches);
 
         const updateSql = `UPDATE documents SET data = ? WHERE collection_id = ? AND doc_id = ?`;
