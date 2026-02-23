@@ -1,11 +1,113 @@
-# React + TypeScript + Vite
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## firesqlite
 
-Currently, two official plugins are available:
+`firesqlite` provides a small Firestore-like API backed by `wa-sqlite` and OPFS.
+It exposes a familiar surface (initialize, `collection`/`doc`, queries, and
+`onSnapshot`) so you can prototype Firestore-style code that persistence in the
+browser's OPFS via `wa-sqlite`.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Quick start
+-----------
+
+Install (for consuming as a package):
+
+```
+npm install firesqlite
+```
+
+Build locally (library):
+
+```
+npm run build:lib
+```
+
+Run the example app (dev server):
+
+```
+npx vite example
+```
+
+API overview
+------------
+
+Import the public API from the package root:
+
+```ts
+import {
+  initializeFirestoreSQLite,
+  getFirestore,
+  collection,
+  doc,
+  setDoc,
+  getDocs,
+  query,
+  orderBy,
+  onSnapshot,
+  deleteDoc
+} from 'firesqlite';
+```
+
+Initialize the DB before using other functions:
+
+```ts
+await initializeFirestoreSQLite('my-db-name');
+const db = getFirestore();
+```
+
+Simple query example
+--------------------
+
+```ts
+const kv = collection(db, 'kv_store');
+const q = query(kv, orderBy('key', 'asc'));
+const snapshot = await getDocs(q);
+const rows = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+```
+
+Snapshot example (real-time-like)
+--------------------------------
+
+```ts
+const unsub = onSnapshot(q, snapshot => {
+  const items = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
+  console.log('snapshot', items);
+});
+
+// later when you want to stop listening
+unsub();
+```
+
+CRUD helpers
+------------
+
+```ts
+// set / upsert
+await setDoc(doc(db, 'kv_store', 'myKey'), { value: 'hello' });
+
+// delete
+await deleteDoc(doc(db, 'kv_store', 'myKey'));
+```
+
+Notes
+-----
+
+- The package builds both ESM (`dist/index.js`) and CJS (`dist/index.cjs`).
+- Worker code uses `import.meta.url` and works best for ESM consumers. CJS
+  consumers may receive an empty `import.meta` value for worker-related paths.
+- See `example/` for a working demo of the UI and the worker integration.
+
+Contributing
+------------
+
+Run the example while developing and open the browser at the Vite URL:
+
+```bash
+npx vite example
+```
+
+If you want me to add automated CI for building and publishing, tell me and
+I'll scaffold a GitHub Actions workflow.
+
 
 ## React Compiler
 
