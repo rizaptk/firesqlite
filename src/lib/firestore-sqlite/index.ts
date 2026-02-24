@@ -283,6 +283,7 @@ export async function getDocs(q: Query | CollectionReference | CollectionGroupRe
         throw new Error('limitToLast() queries require specifying at least one orderBy() clause');
     }
 
+    
     let sql = `SELECT doc_id, data FROM documents WHERE `;
     const bindings: any[] = [];
 
@@ -407,7 +408,7 @@ export async function updateDoc(docRef: DocumentReference, data: Record<string, 
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function writeBatch(_db: any) {
-    const operations: { sql: string, bindings: any[], collectionId: string }[] = [];
+    const operations: { sql: string, bindings: any[], collectionId: string, docId: string }[] = [];
     let _committed = false;
 
     return {
@@ -418,14 +419,16 @@ export function writeBatch(_db: any) {
                 sql: `INSERT INTO documents (collection_id, doc_id, data) VALUES (?, ?, ?) 
                       ON CONFLICT(collection_id, doc_id) DO UPDATE SET data = excluded.data`,
                 bindings: [docRef.collectionId, docRef.id, JSON.stringify(expanded)],
-                collectionId: docRef.collectionId
+                collectionId: docRef.collectionId,
+                docId: docRef.id
             });
         },
         delete(docRef: DocumentReference) {
             operations.push({
                 sql: `DELETE FROM documents WHERE collection_id = ? AND doc_id = ?`,
                 bindings: [docRef.collectionId, docRef.id],
-                collectionId: docRef.collectionId
+                collectionId: docRef.collectionId,
+                docId: docRef.id
             });
         },
         update(docRef: DocumentReference, data: Record<string, any>) {
@@ -434,7 +437,8 @@ export function writeBatch(_db: any) {
             operations.push({
                 sql: `UPDATE documents SET data = json_patch(data, ?) WHERE collection_id = ? AND doc_id = ?`,
                 bindings: [JSON.stringify(expanded), docRef.collectionId, docRef.id],
-                collectionId: docRef.collectionId
+                collectionId: docRef.collectionId,
+                docId: docRef.id
             });
         },
         async commit() {
@@ -449,69 +453,147 @@ export function writeBatch(_db: any) {
     };
 }
 
-export function onSnapshot(q: Query | CollectionReference | CollectionGroupReference, callback: (snapshot: any) => void) {
+// export function onSnapshot(q: Query | CollectionReference | CollectionGroupReference, callback: (snapshot: any) => void) {
+//     let collectionId = '';
+//     const isCollectionGroup = q.type === 'collectionGroup' || (q.type === 'query' && (q as Query).collection.type === 'collectionGroup');
+
+//     if (q.type === 'collection' || q.type === 'collectionGroup') {
+//         collectionId = q.id;
+//     } else {
+//         collectionId = (q as Query).collection.id;
+//     }
+
+//     let previousDocs: any[] = [];
+
+//     const handler = () => {
+//         getDocs(q).then(snapshot => {
+//             const currentDocs = snapshot.docs;
+//             const changes: any[] = [];
+
+//             // Added & Modified
+//             currentDocs.forEach((doc: any, newIndex: number) => {
+//                 const prevIndex = previousDocs.findIndex(p => p.id === doc.id);
+//                 if (prevIndex === -1) {
+//                     changes.push({ type: 'added', doc, newIndex, oldIndex: -1 });
+//                 } else {
+//                     const prevDataStr = JSON.stringify(previousDocs[prevIndex].data());
+//                     const currDataStr = JSON.stringify(doc.data());
+//                     if (prevDataStr !== currDataStr) {
+//                         changes.push({ type: 'modified', doc, newIndex, oldIndex: prevIndex });
+//                     }
+//                 }
+//             });
+
+//             // Removed
+//             previousDocs.forEach((doc: any, oldIndex: number) => {
+//                 const currIndex = currentDocs.findIndex((c: any) => c.id === doc.id);
+//                 if (currIndex === -1) {
+//                     changes.push({ type: 'removed', doc, newIndex: -1, oldIndex });
+//                 }
+//             });
+
+//             previousDocs = currentDocs;
+
+//             (snapshot as any).docChanges = () => changes;
+//             callback(snapshot);
+//         });
+//     };
+
+//     // Initial fetch
+//     handler();
+
+//     if (isCollectionGroup) {
+//         dbEvents.on('*', handler);
+//     } else {
+//         dbEvents.on(collectionId, handler);
+//     }
+
+//     // Return unsubscribe function
+//     return () => {
+//         if (isCollectionGroup) {
+//             dbEvents.off('*', handler);
+//         } else {
+//             dbEvents.off(collectionId, handler);
+//         }
+//     };
+// }
+
+/**
+ * Enhanced onSnapshot
+ * Supports both DocumentReference and Query/CollectionReference
+ */
+export function onSnapshot(
+    ref: Query | CollectionReference | CollectionGroupReference | DocumentReference, 
+    callback: (snapshot: any) => void
+) {
+    // 1. Handle DocumentReference Snapshot
+    if (ref.type === 'document') {
+        const docRef = ref as DocumentReference;
+        const eventKey = `${docRef.collectionId}/${docRef.id}`;
+        let lastDataString = '';
+
+        const handler = async () => {
+            const snap = await getDoc(docRef);
+            const currentDataString = JSON.stringify(snap.data());
+            
+            // Only fire if existence or data changed
+            if (currentDataString !== lastDataString) {
+                lastDataString = currentDataString;
+                callback(snap);
+            }
+        };
+
+        handler(); // Initial fetch
+        dbEvents.on(eventKey, handler);
+        return () => dbEvents.off(eventKey, handler);
+    }
+
+    // 2. Handle Collection/Query Snapshot
+    const q = ref as any;
     let collectionId = '';
-    const isCollectionGroup = q.type === 'collectionGroup' || (q.type === 'query' && (q as Query).collection.type === 'collectionGroup');
+    const isCollectionGroup = q.type === 'collectionGroup' || (q.type === 'query' && q.collection.type === 'collectionGroup');
 
     if (q.type === 'collection' || q.type === 'collectionGroup') {
         collectionId = q.id;
     } else {
-        collectionId = (q as Query).collection.id;
+        collectionId = q.collection.id;
     }
 
     let previousDocs: any[] = [];
 
-    const handler = () => {
-        getDocs(q).then(snapshot => {
-            const currentDocs = snapshot.docs;
-            const changes: any[] = [];
+    const handler = async () => {
+        const snapshot = await getDocs(q);
+        const currentDocs = snapshot.docs;
+        const changes: any[] = [];
 
-            // Added & Modified
-            currentDocs.forEach((doc: any, newIndex: number) => {
-                const prevIndex = previousDocs.findIndex(p => p.id === doc.id);
-                if (prevIndex === -1) {
-                    changes.push({ type: 'added', doc, newIndex, oldIndex: -1 });
-                } else {
-                    const prevDataStr = JSON.stringify(previousDocs[prevIndex].data());
-                    const currDataStr = JSON.stringify(doc.data());
-                    if (prevDataStr !== currDataStr) {
-                        changes.push({ type: 'modified', doc, newIndex, oldIndex: prevIndex });
-                    }
+        currentDocs.forEach((doc: any, newIndex: number) => {
+            const prevIndex = previousDocs.findIndex(p => p.id === doc.id);
+            if (prevIndex === -1) {
+                changes.push({ type: 'added', doc, newIndex, oldIndex: -1 });
+            } else {
+                const prevDataStr = JSON.stringify(previousDocs[prevIndex].data());
+                const currDataStr = JSON.stringify(doc.data());
+                if (prevDataStr !== currDataStr) {
+                    changes.push({ type: 'modified', doc, newIndex, oldIndex: prevIndex });
                 }
-            });
-
-            // Removed
-            previousDocs.forEach((doc: any, oldIndex: number) => {
-                const currIndex = currentDocs.findIndex((c: any) => c.id === doc.id);
-                if (currIndex === -1) {
-                    changes.push({ type: 'removed', doc, newIndex: -1, oldIndex });
-                }
-            });
-
-            previousDocs = currentDocs;
-
-            (snapshot as any).docChanges = () => changes;
-            callback(snapshot);
+            }
         });
+
+        previousDocs.forEach((doc: any, oldIndex: number) => {
+            if (!currentDocs.find((c: any) => c.id === doc.id)) {
+                changes.push({ type: 'removed', doc, newIndex: -1, oldIndex });
+            }
+        });
+
+        previousDocs = currentDocs;
+        (snapshot as any).docChanges = () => changes;
+        callback(snapshot);
     };
 
-    // Initial fetch
     handler();
-
-    if (isCollectionGroup) {
-        dbEvents.on('*', handler);
-    } else {
-        dbEvents.on(collectionId, handler);
-    }
-
-    // Return unsubscribe function
-    return () => {
-        if (isCollectionGroup) {
-            dbEvents.off('*', handler);
-        } else {
-            dbEvents.off(collectionId, handler);
-        }
-    };
+    const listenKey = isCollectionGroup ? '*' : collectionId;
+    dbEvents.on(listenKey, handler);
+    return () => dbEvents.off(listenKey, handler);
 }
 
 export async function createIndex(_db: any, collection: CollectionReference | CollectionGroupReference, field: string) {

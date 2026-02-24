@@ -1,4 +1,4 @@
-
+awesome, finally it is fixed, update readme to adapt new fix related to next js usage : 
 ## firesqlite
 
 ### firesqlite
