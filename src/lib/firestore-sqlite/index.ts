@@ -453,75 +453,6 @@ export function writeBatch(_db: any) {
     };
 }
 
-// export function onSnapshot(q: Query | CollectionReference | CollectionGroupReference, callback: (snapshot: any) => void) {
-//     let collectionId = '';
-//     const isCollectionGroup = q.type === 'collectionGroup' || (q.type === 'query' && (q as Query).collection.type === 'collectionGroup');
-
-//     if (q.type === 'collection' || q.type === 'collectionGroup') {
-//         collectionId = q.id;
-//     } else {
-//         collectionId = (q as Query).collection.id;
-//     }
-
-//     let previousDocs: any[] = [];
-
-//     const handler = () => {
-//         getDocs(q).then(snapshot => {
-//             const currentDocs = snapshot.docs;
-//             const changes: any[] = [];
-
-//             // Added & Modified
-//             currentDocs.forEach((doc: any, newIndex: number) => {
-//                 const prevIndex = previousDocs.findIndex(p => p.id === doc.id);
-//                 if (prevIndex === -1) {
-//                     changes.push({ type: 'added', doc, newIndex, oldIndex: -1 });
-//                 } else {
-//                     const prevDataStr = JSON.stringify(previousDocs[prevIndex].data());
-//                     const currDataStr = JSON.stringify(doc.data());
-//                     if (prevDataStr !== currDataStr) {
-//                         changes.push({ type: 'modified', doc, newIndex, oldIndex: prevIndex });
-//                     }
-//                 }
-//             });
-
-//             // Removed
-//             previousDocs.forEach((doc: any, oldIndex: number) => {
-//                 const currIndex = currentDocs.findIndex((c: any) => c.id === doc.id);
-//                 if (currIndex === -1) {
-//                     changes.push({ type: 'removed', doc, newIndex: -1, oldIndex });
-//                 }
-//             });
-
-//             previousDocs = currentDocs;
-
-//             (snapshot as any).docChanges = () => changes;
-//             callback(snapshot);
-//         });
-//     };
-
-//     // Initial fetch
-//     handler();
-
-//     if (isCollectionGroup) {
-//         dbEvents.on('*', handler);
-//     } else {
-//         dbEvents.on(collectionId, handler);
-//     }
-
-//     // Return unsubscribe function
-//     return () => {
-//         if (isCollectionGroup) {
-//             dbEvents.off('*', handler);
-//         } else {
-//             dbEvents.off(collectionId, handler);
-//         }
-//     };
-// }
-
-/**
- * Enhanced onSnapshot
- * Supports both DocumentReference and Query/CollectionReference
- */
 export function onSnapshot(
     ref: Query | CollectionReference | CollectionGroupReference | DocumentReference, 
     callback: (snapshot: any) => void
@@ -598,4 +529,62 @@ export function onSnapshot(
 
 export async function createIndex(_db: any, collection: CollectionReference | CollectionGroupReference, field: string) {
     await runSafe(async (api) => api.createIndex(collection.id, field));
+}
+
+// Add to index.ts
+
+/**
+ * Exports the entire database as a JSON string.
+ */
+export async function exportFirestoreJSON(): Promise<string> {
+    const data = await runSafe(api => api.exportDatabase());
+    return JSON.stringify(data);
+}
+
+/**
+ * Restores the database from a JSON string.
+ * WARNING: This replaces all current data.
+ */
+export async function importFirestoreJSON(jsonString: string): Promise<void> {
+    const data = JSON.parse(jsonString);
+    if (!Array.isArray(data)) throw new Error("Invalid backup format");
+
+    await runSafe(api => api.importDatabase(data));
+    
+    // Notify all active listeners that the data has changed significantly
+    dbEvents.emit('*');
+}
+
+/**
+ * Utility: Downloads the database as a .json file in the browser
+ */
+export async function downloadBackup(filename?: string) {
+    const json = await exportFirestoreJSON();
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || `firestore_backup_${new Date().toISOString()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+/**
+ * Utility: Restores the database from a File object (e.g., from <input type="file">)
+ */
+export async function restoreFromFile(file: File): Promise<void> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const content = e.target?.result as string;
+                await importFirestoreJSON(content);
+                resolve();
+            } catch (err) {
+                reject(err);
+            }
+        };
+        reader.onerror = reject;
+        reader.readAsText(file);
+    });
 }

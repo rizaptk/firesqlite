@@ -139,7 +139,39 @@ export const workerAPI = {
         };
         executionQueue = executionQueue.then(task, task);
         return executionQueue;
-    }
+    },
+    // Add these to workerAPI in worker.ts
+
+    async exportDatabase() {
+        // We wrap it in the executionQueue to ensure no writes happen during export
+        const task = () => this._internalExecute('SELECT collection_id, doc_id, data FROM documents');
+        executionQueue = executionQueue.then(task, task);
+        return executionQueue;
+    },
+
+    async importDatabase(rows: {collection_id: string, doc_id: string, data: string}[]) {
+        const task = async () => {
+            await this._internalExecute('BEGIN TRANSACTION');
+            try {
+                // Clear existing data
+                await this._internalExecute('DELETE FROM documents');
+                
+                // Insert new data
+                for (const row of rows) {
+                    await this._internalExecute(
+                        `INSERT INTO documents (collection_id, doc_id, data) VALUES (?, ?, ?)`,
+                        [row.collection_id, row.doc_id, row.data]
+                    );
+                }
+                await this._internalExecute('COMMIT');
+            } catch (e) {
+                await this._internalExecute('ROLLBACK');
+                throw e;
+            }
+        };
+        executionQueue = executionQueue.then(task, task);
+        return executionQueue;
+    },
 };
 
 Comlink.expose(workerAPI);
