@@ -568,20 +568,6 @@ export async function getDownloadURL(storageRef: StorageReference): Promise<stri
 }
 
 /**
- * Restores the database from a binary Blob or ArrayBuffer.
- */
-// export async function importFullBinary(data: Blob | ArrayBuffer) {
-//     const buffer = data instanceof Blob ? await data.arrayBuffer() : data;
-//     const uint8 = new Uint8Array(buffer);
-    
-//     // Send binary to worker using transferables for zero-copy performance
-//     await runSafe(api => api.importDatabaseBinary(Comlink.transfer(uint8, [uint8.buffer])));
-    
-//     // Refresh all UI listeners
-//     dbEvents.emit('*');
-// }
-
-/**
  * Triggers a binary backup download
  */
 export async function downloadBinaryBackup(filename?: string) {
