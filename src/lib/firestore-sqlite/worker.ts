@@ -17,9 +17,11 @@ let vfs: OriginPrivateFileSystemVFS | undefined;
  * the WASM engine only processes exactly ONE operation at a time.
  */
 let executionQueue: Promise<any> = Promise.resolve();
+let currentDbName: string | undefined;
 
 export const workerAPI = {
     async init(dbName: string, wasmUrl: string = defWasmUrl) {
+        currentDbName = dbName;
         executionQueue = executionQueue.then(async () => {
             if (db !== undefined) return;
             const module = await SQLiteAsyncESMFactory({
@@ -38,6 +40,16 @@ export const workerAPI = {
                 CREATE TABLE IF NOT EXISTS documents (
                     collection_id TEXT, doc_id TEXT, data TEXT,
                     PRIMARY KEY (collection_id, doc_id)
+                )
+            `);
+            // NEW: Table for storing files/images
+            await this._internalExecute(`
+                CREATE TABLE IF NOT EXISTS files (
+                    path TEXT PRIMARY KEY,
+                    data BLOB,
+                    contentType TEXT,
+                    size INTEGER,
+                    updatedAt TEXT
                 )
             `);
         });
@@ -140,34 +152,91 @@ export const workerAPI = {
         executionQueue = executionQueue.then(task, task);
         return executionQueue;
     },
-    // Add these to workerAPI in worker.ts
 
-    async exportDatabase() {
-        // We wrap it in the executionQueue to ensure no writes happen during export
-        const task = () => this._internalExecute('SELECT collection_id, doc_id, data FROM documents');
+    async uploadFile(path: string, data: Uint8Array, contentType: string) {
+        const task = () => this._internalExecute(
+            `INSERT INTO files (path, data, contentType, size, updatedAt) 
+             VALUES (?, ?, ?, ?, ?) 
+             ON CONFLICT(path) DO UPDATE SET data=excluded.data, contentType=excluded.contentType, size=excluded.size, updatedAt=excluded.updatedAt`,
+            [path, data, contentType, data.length, new Date().toISOString()]
+        );
         executionQueue = executionQueue.then(task, task);
         return executionQueue;
     },
 
-    async importDatabase(rows: {collection_id: string, doc_id: string, data: string}[]) {
+    async getFile(path: string) {
+        const task = () => this._internalExecute(`SELECT data, contentType FROM files WHERE path = ?`, [path]);
+        executionQueue = executionQueue.then(task, task);
+        const results = await executionQueue;
+        return results[0]; // Returns { data: Uint8Array, contentType: string }
+    },
+
+    async deleteFile(path: string) {
+        const task = () => this._internalExecute(`DELETE FROM files WHERE path = ?`, [path]);
+        executionQueue = executionQueue.then(task, task);
+        return executionQueue;
+    },
+
+    async exportDatabaseBinary(): Promise<Uint8Array> {
         const task = async () => {
-            await this._internalExecute('BEGIN TRANSACTION');
-            try {
-                // Clear existing data
-                await this._internalExecute('DELETE FROM documents');
-                
-                // Insert new data
-                for (const row of rows) {
-                    await this._internalExecute(
-                        `INSERT INTO documents (collection_id, doc_id, data) VALUES (?, ?, ?)`,
-                        [row.collection_id, row.doc_id, row.data]
-                    );
-                }
-                await this._internalExecute('COMMIT');
-            } catch (e) {
-                await this._internalExecute('ROLLBACK');
-                throw e;
+            if (!currentDbName) throw new Error("DB_NOT_INITIALIZED");
+
+            // 1. Close the database to release the OPFS file lock
+            // This is mandatory; OPFS allows only one 'AccessHandle' at a time.
+            if (db !== undefined) {
+                await sqlite3.close(db);
+                db = undefined;
             }
+
+            try {
+                // 2. Access the OPFS root directory
+                const root = await navigator.storage.getDirectory();
+                
+                // 3. Get the file handle and read the data
+                const fileHandle = await root.getFileHandle(currentDbName);
+                const file = await fileHandle.getFile();
+                const buffer = await file.arrayBuffer();
+                
+                return new Uint8Array(buffer);
+            } finally {
+                // 4. Re-open the database so the app continues working
+                db = await this._safeOpen(currentDbName);
+            }
+        };
+        executionQueue = executionQueue.then(task, task);
+        return executionQueue;
+    },
+
+    async importDatabaseBinary(data: Uint8Array) {
+        const task = async () => {
+            if (!currentDbName) throw new Error("DB_NOT_INITIALIZED");
+
+            // 1. Close current connection to unlock the file
+            if (db !== undefined) {
+                await sqlite3.close(db);
+                db = undefined;
+            }
+
+            // 2. Access OPFS
+            const root = await navigator.storage.getDirectory();
+            const fileHandle = await root.getFileHandle(currentDbName, { create: true });
+
+            // 3. Create a writable stream and write the new binary data
+            // Note: In some browsers/workers, we use createSyncAccessHandle for better performance
+            if ('createSyncAccessHandle' in fileHandle) {
+                const accessHandle = await (fileHandle as any).createSyncAccessHandle();
+                accessHandle.truncate(0); // Clear existing file
+                accessHandle.write(data);
+                accessHandle.flush();
+                accessHandle.close();
+            } else {
+                const writable = await (fileHandle as any).createWritable();
+                await writable.write(data);
+                await writable.close();
+            }
+
+            // 4. Re-open the database with the new data
+            db = await this._safeOpen(currentDbName);
         };
         executionQueue = executionQueue.then(task, task);
         return executionQueue;

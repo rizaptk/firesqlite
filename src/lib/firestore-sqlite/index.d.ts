@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export declare function initializeFirestoreSQLite(wasmUrl?: string, dbName?: string): Promise<void>;
 export declare const getFirestore: () => any;
 

@@ -531,60 +531,82 @@ export async function createIndex(_db: any, collection: CollectionReference | Co
     await runSafe(async (api) => api.createIndex(collection.id, field));
 }
 
-// Add to index.ts
+// --- Storage API ---
 
-/**
- * Exports the entire database as a JSON string.
- */
-export async function exportFirestoreJSON(): Promise<string> {
-    const data = await runSafe(api => api.exportDatabase());
-    return JSON.stringify(data);
+export const getStorage = () => ({});
+
+export interface StorageReference {
+    path: string;
 }
 
-/**
- * Restores the database from a JSON string.
- * WARNING: This replaces all current data.
- */
-export async function importFirestoreJSON(jsonString: string): Promise<void> {
-    const data = JSON.parse(jsonString);
-    if (!Array.isArray(data)) throw new Error("Invalid backup format");
+export function ref(_storage: any, path: string): StorageReference {
+    return { path };
+}
 
-    await runSafe(api => api.importDatabase(data));
+export async function uploadBytes(storageRef: StorageReference, data: Blob | Uint8Array | ArrayBuffer) {
+    let bytes: Uint8Array;
+    let type = 'application/octet-stream';
+
+    if (data instanceof Blob) {
+        type = data.type;
+        bytes = new Uint8Array(await data.arrayBuffer());
+    } else if (data instanceof ArrayBuffer) {
+        bytes = new Uint8Array(data);
+    } else {
+        bytes = data;
+    }
+
+    await runSafe(api => api.uploadFile(storageRef.path, Comlink.transfer(bytes, [bytes.buffer]), type));
+}
+
+export async function getDownloadURL(storageRef: StorageReference): Promise<string> {
+    const file = await runSafe(api => api.getFile(storageRef.path));
+    if (!file) throw new Error("File not found");
     
-    // Notify all active listeners that the data has changed significantly
-    dbEvents.emit('*');
+    const blob = new Blob([file.data], { type: file.contentType });
+    return URL.createObjectURL(blob);
 }
 
 /**
- * Utility: Downloads the database as a .json file in the browser
+ * Restores the database from a binary Blob or ArrayBuffer.
  */
-export async function downloadBackup(filename?: string) {
-    const json = await exportFirestoreJSON();
-    const blob = new Blob([json], { type: 'application/json' });
+// export async function importFullBinary(data: Blob | ArrayBuffer) {
+//     const buffer = data instanceof Blob ? await data.arrayBuffer() : data;
+//     const uint8 = new Uint8Array(buffer);
+    
+//     // Send binary to worker using transferables for zero-copy performance
+//     await runSafe(api => api.importDatabaseBinary(Comlink.transfer(uint8, [uint8.buffer])));
+    
+//     // Refresh all UI listeners
+//     dbEvents.emit('*');
+// }
+
+/**
+ * Triggers a binary backup download
+ */
+export async function downloadBinaryBackup(filename?: string) {
+    const bytes = await runSafe(api => api.exportDatabaseBinary());
+    const blob = new Blob([bytes], { type: 'application/x-sqlite3' });
+    
+    const name = filename || `backup_${new Date().toISOString().split('T')[0]}.sqlite`;
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = filename || `firestore_backup_${new Date().toISOString()}.json`;
+    a.download = name;
     a.click();
     URL.revokeObjectURL(url);
 }
 
 /**
- * Utility: Restores the database from a File object (e.g., from <input type="file">)
+ * Restores the DB from a .sqlite file
  */
-export async function restoreFromFile(file: File): Promise<void> {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = async (e) => {
-            try {
-                const content = e.target?.result as string;
-                await importFirestoreJSON(content);
-                resolve();
-            } catch (err) {
-                reject(err);
-            }
-        };
-        reader.onerror = reject;
-        reader.readAsText(file);
-    });
+export async function importFullBinary(file: File): Promise<void> {
+    const buffer = await file.arrayBuffer();
+    const uint8 = new Uint8Array(buffer);
+    
+    // Use Comlink.transfer to move the large buffer instead of copying it
+    await runSafe(api => api.importDatabaseBinary(Comlink.transfer(uint8, [uint8.buffer])));
+    
+    // Force refresh all UI listeners
+    dbEvents.emit('*');
 }
