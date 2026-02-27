@@ -17,6 +17,15 @@ const terminateAndReset = () => {
     g[INIT_PROMISE_KEY] = undefined;
 };
 
+async function ensurePersistentStorage() {
+    if (!('storage' in navigator)) return false;
+
+    const persisted = await navigator.storage.persisted();
+    if (persisted) return true;
+
+    return await navigator.storage.persist();
+}
+
 export async function initializeFirestoreSQLite(wasmUrl?: string, dbName = 'firestore-sqlite.db'): Promise<void> {
     if (typeof window === 'undefined') return;
     const g = globalThis as any;
@@ -30,6 +39,8 @@ export async function initializeFirestoreSQLite(wasmUrl?: string, dbName = 'fire
 
     if (!g[INIT_PROMISE_KEY]) {
         g[INIT_PROMISE_KEY] = (async () => {
+            await ensurePersistentStorage();
+
             try {
                 await g[WORKER_KEY].init(dbName, g[WASM_URL_KEY]);
                 g[DB_NAME_KEY] = dbName; 
