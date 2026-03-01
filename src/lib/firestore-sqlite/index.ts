@@ -224,7 +224,7 @@ export async function addDoc(collectionRef: CollectionReference, data: Record<st
 }
 
 // Queries
-export type WhereFilterOp = '<' | '<=' | '==' | '>=' | '>' | '!=' | 'array-contains' | 'in';
+export type WhereFilterOp = '<' | '<=' | '==' | '>=' | '>' | '!=' | 'array-contains' | 'in' | 'like';
 
 export interface QueryConstraint {
     type: 'where' | 'limit' | 'limitToLast' | 'orderBy';
@@ -314,6 +314,9 @@ export async function getDocs(q: Query | CollectionReference | CollectionGroupRe
         } else if (w.op === 'in') {
             sql += ` AND json_extract(data, '$.' || ?) IN (${w.value.map(() => '?').join(', ')})`;
             bindings.push(w.field, ...w.value);
+        } else if (w.op === 'like') {
+            sql += ` AND json_extract(data, '$.' || ?) LIKE ?`;
+            bindings.push(w.field, `%${w.value}%`);
         } else {
             sql += ` AND json_extract(data, '$.' || ?) ${w.op === '==' ? '=' : w.op} ?`;
             bindings.push(w.field, w.value);
