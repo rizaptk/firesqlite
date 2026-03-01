@@ -181,25 +181,21 @@ export const workerAPI = {
         const task = async () => {
             if (!currentDbName) throw new Error("DB_NOT_INITIALIZED");
 
-            // 1. Close the database to release the OPFS file lock
-            // This is mandatory; OPFS allows only one 'AccessHandle' at a time.
             if (db !== undefined) {
                 await sqlite3.close(db);
                 db = undefined;
             }
 
             try {
-                // 2. Access the OPFS root directory
                 const root = await navigator.storage.getDirectory();
-                
-                // 3. Get the file handle and read the data
                 const fileHandle = await root.getFileHandle(currentDbName);
                 const file = await fileHandle.getFile();
                 const buffer = await file.arrayBuffer();
+                const uint8 = new Uint8Array(buffer);
                 
-                return new Uint8Array(buffer);
+                // OPTIMIZATION: Use Comlink.transfer to avoid copying the memory
+                return Comlink.transfer(uint8, [uint8.buffer]);
             } finally {
-                // 4. Re-open the database so the app continues working
                 db = await this._safeOpen(currentDbName);
             }
         };

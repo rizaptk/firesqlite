@@ -607,3 +607,12 @@ export async function importFullBinary(file: File): Promise<void> {
     // Force refresh all UI listeners
     dbEvents.emit('*');
 }
+
+/**
+ * Returns the raw SQLite database bytes.
+ * Use this for advanced processes like uploading to a server, 
+ * or writing to a specific file handle.
+ */
+export async function getDatabaseBackup(): Promise<Uint8Array> {
+    return await runSafe(api => api.exportDatabaseBinary());
+}
