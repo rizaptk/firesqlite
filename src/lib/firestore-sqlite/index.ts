@@ -315,7 +315,7 @@ export async function getDocs(q: Query | CollectionReference | CollectionGroupRe
             sql += ` AND json_extract(data, '$.' || ?) IN (${w.value.map(() => '?').join(', ')})`;
             bindings.push(w.field, ...w.value);
         } else if (w.op === 'like') {
-            sql += ` AND json_extract(data, '$.' || ?) LIKE ?`;
+            sql += ` AND CAST(json_extract(data, '$.' || ?) AS TEXT) LIKE ?`;
             bindings.push(w.field, `%${w.value}%`);
         } else {
             sql += ` AND json_extract(data, '$.' || ?) ${w.op === '==' ? '=' : w.op} ?`;
@@ -397,7 +397,12 @@ export async function getCountFromServer(q: Query | CollectionReference | Collec
         } else if (w.op === 'in') {
             sql += ` AND json_extract(data, '$.' || ?) IN (${w.value.map(() => '?').join(', ')})`;
             bindings.push(w.field, ...w.value);
-        } else {
+        } else if (w.op === 'like') {
+            // FIX: Added missing 'like' implementation to getCountFromServer
+            sql += ` AND CAST(json_extract(data, '$.' || ?) AS TEXT) LIKE ?`;
+            bindings.push(w.field, `%${w.value}%`);
+        }
+        else {
             sql += ` AND json_extract(data, '$.' || ?) ${w.op === '==' ? '=' : w.op} ?`;
             bindings.push(w.field, w.value);
         }
