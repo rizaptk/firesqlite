@@ -317,8 +317,18 @@ export async function getDocs(q: Query | CollectionReference | CollectionGroupRe
         } else if (w.op === 'like') {
             sql += ` AND CAST(json_extract(data, '$.' || ?) AS TEXT) LIKE ?`;
             bindings.push(w.field, `%${w.value}%`);
+        } else if (w.op === '==') {
+            // FIX: Use 'IS' for null-safe equality (matches if both are 1, or both are NULL)
+            sql += ` AND json_extract(data, '$.' || ?) IS ?`;
+            bindings.push(w.field, w.value);
+        } else if (w.op === '!=') {
+            // FIX: Use 'IS NOT' for null-safe inequality
+            // This ensures that if a field is MISSING (NULL), it still counts as "not false"
+            sql += ` AND json_extract(data, '$.' || ?) IS NOT ?`;
+            bindings.push(w.field, w.value);
         } else {
-            sql += ` AND json_extract(data, '$.' || ?) ${w.op === '==' ? '=' : w.op} ?`;
+            // sql += ` AND json_extract(data, '$.' || ?) ${w.op === '==' ? '=' : w.op} ?`;
+            sql += ` AND json_extract(data, '$.' || ?) ${w.op} ?`;
             bindings.push(w.field, w.value);
         }
     }
@@ -401,9 +411,17 @@ export async function getCountFromServer(q: Query | CollectionReference | Collec
             // FIX: Added missing 'like' implementation to getCountFromServer
             sql += ` AND CAST(json_extract(data, '$.' || ?) AS TEXT) LIKE ?`;
             bindings.push(w.field, `%${w.value}%`);
-        }
-        else {
-            sql += ` AND json_extract(data, '$.' || ?) ${w.op === '==' ? '=' : w.op} ?`;
+        } else if (w.op === '==') {
+            // Match getDocs logic: Use IS for null-safe equality
+            sql += ` AND json_extract(data, '$.' || ?) IS ?`;
+            bindings.push(w.field, w.value);
+        } else if (w.op === '!=') {
+            // Match getDocs logic: Use IS NOT for null-safe inequality
+            sql += ` AND json_extract(data, '$.' || ?) IS NOT ?`;
+            bindings.push(w.field, w.value);
+        } else {
+            // sql += ` AND json_extract(data, '$.' || ?) ${w.op === '==' ? '=' : w.op} ?`;
+            sql += ` AND json_extract(data, '$.' || ?) ${w.op} ?`;
             bindings.push(w.field, w.value);
         }
     }
