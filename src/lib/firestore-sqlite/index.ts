@@ -181,6 +181,13 @@ const reviveDates = (obj: any): any => {
     return obj;
 };
 
+// Helper to trigger all relevant listeners
+function emitChange(collectionId: string, docId: string) {
+    dbEvents.emit(collectionId);                // Notifies Collection listeners
+    dbEvents.emit(`${collectionId}/${docId}`); // Notifies Document listeners
+    dbEvents.emit('*');                         // Notifies Collection Group listeners
+}
+
 export async function setDoc(docRef: DocumentReference, data: Record<string, any>) {
     const processedData = processData(data);
     const expanded = expandDotNotation(processedData);
@@ -191,7 +198,8 @@ export async function setDoc(docRef: DocumentReference, data: Record<string, any
         [docRef.collectionId, docRef.id, JSON.stringify(expanded)]
     ))
 
-    dbEvents.emit(docRef.collectionId);
+    // dbEvents.emit(docRef.collectionId);
+    emitChange(docRef.collectionId, docRef.id);
 }
 
 export async function getDoc(docRef: DocumentReference) {
@@ -214,7 +222,8 @@ export async function deleteDoc(docRef: DocumentReference) {
         `DELETE FROM documents WHERE collection_id = ? AND doc_id = ?`,
         [docRef.collectionId, docRef.id]
     ));
-    dbEvents.emit(docRef.collectionId);
+    // dbEvents.emit(docRef.collectionId);
+    emitChange(docRef.collectionId, docRef.id);
 }
 
 export async function addDoc(collectionRef: CollectionReference, data: Record<string, any>) {
@@ -440,7 +449,8 @@ export async function updateDoc(docRef: DocumentReference, data: Record<string, 
         `UPDATE documents SET data = json_patch(data, ?) WHERE collection_id = ? AND doc_id = ?`,
         [JSON.stringify(expanded), docRef.collectionId, docRef.id]
     ));
-    dbEvents.emit(docRef.collectionId);
+    // dbEvents.emit(docRef.collectionId);
+    emitChange(docRef.collectionId, docRef.id);
 }
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -486,6 +496,9 @@ export function writeBatch(_db: any) {
 
             const emittedCols = new Set(operations.map(op => op.collectionId));
             emittedCols.forEach(col => dbEvents.emit(col));
+            
+            operations.forEach(op => dbEvents.emit(`${op.collectionId}/${op.docId}`));
+            dbEvents.emit('*');
         }
     };
 }
