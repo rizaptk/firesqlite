@@ -45,16 +45,18 @@ export const createTauriHandler = (drivers: TauriDrivers): FirestoreBackend => {
 
     async createIndex(collection_id: string, field: string) {
 
-      const idxName =
-        `idx_${collection_id}_${field.replace(/[^a-zA-Z0-9]/g, "_")}`;
+      const safeCollection = collection_id.replace(/[^a-zA-Z0-9_]/g, "_");
+      const safeField = field.replace(/[^a-zA-Z0-9_]/g, "_");
+
+      const idxName = `idx_${safeCollection}_${safeField}`;
 
       const sql = `
         CREATE INDEX IF NOT EXISTS ${idxName}
-        ON documents(collection_id, json_extract(data, '$.${field}'))
-        WHERE collection_id = ?
+        ON documents(json_extract(data, '$.${field}'), collection_id)
+        WHERE collection_id = '${collection_id}'
       `;
 
-      await this.execute(sql, [collection_id]);
+      await this.execute(sql);
     },
 
     async uploadFile(path: string, data: Uint8Array, contentType: string) {
