@@ -1,95 +1,136 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import * as Comlink from 'comlink';
 import mitt from 'mitt';
-import type { FirestoreWorkerWrapper } from './worker';
+import { createTauriHandler } from './tauri-handler';
+import type { EngineType, TauriDrivers, FirestoreBackend } from './types';
 
-const WORKER_KEY = '__FIRESTORE_SQLITE_WORKER__';
-const RAW_WORKER_KEY = '__FIRESTORE_SQLITE_RAW__';
-const INIT_PROMISE_KEY = '__FIRESTORE_SQLITE_INIT_PROMISE__';
-const DB_NAME_KEY = '__FIRESTORE_SQLITE_NAME__';
-const WASM_URL_KEY = '__FIRESTORE_WASM_URL__';
+/**
+ * MODULE STATE: The single source of truth.
+ * We store the raw Worker here so we can terminate it without globalThis.
+ */
+const STATE = {
+    engine: 'wa-sqlite' as EngineType,
+    backend: null as FirestoreBackend | null,
+    rawWorker: null as Worker | null, // Added here
+    initPromise: null as Promise<void> | null,
+    dbName: 'firestore.db',
+    options: null as {
+        dbName?: string;
+        wasmUrl?: string;
+        tauriDrivers?: TauriDrivers;
+    } | null
+};
 
+/**
+ * Reset internal state and terminate workers.
+ * No more globalThis usage.
+ */
 const terminateAndReset = () => {
-    const g = globalThis as any;
-    if (g[RAW_WORKER_KEY]) g[RAW_WORKER_KEY].terminate();
-    g[WORKER_KEY] = undefined;
-    g[RAW_WORKER_KEY] = undefined;
-    g[INIT_PROMISE_KEY] = undefined;
+    if (STATE.rawWorker) {
+        STATE.rawWorker.terminate();
+        STATE.rawWorker = null;
+    }
+    STATE.backend = null;
+    STATE.initPromise = null;
 };
 
 async function ensurePersistentStorage() {
-    if (!('storage' in navigator)) return false;
-
+    if (typeof navigator === 'undefined' || !('storage' in navigator)) return false;
     const persisted = await navigator.storage.persisted();
     if (persisted) return true;
-
     return await navigator.storage.persist();
 }
 
-export async function initializeFirestoreSQLite(wasmUrl?: string, dbName = 'firestore-sqlite.db'): Promise<void> {
-    if (typeof window === 'undefined') return;
-    const g = globalThis as any;
-    if (wasmUrl) g[WASM_URL_KEY] = wasmUrl;
+/**
+ * Main Entry Point: Configures the storage engine.
+ */
+export async function initializeFirestoreSQLite(options: {
+    engine: EngineType,
+    dbName?: string,
+    wasmUrl?: string, 
+    tauriDrivers?: TauriDrivers
+}): Promise<void> {
+    if (STATE.initPromise) return STATE.initPromise;
 
-    if (!g[WORKER_KEY]) {
-        const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
-        g[RAW_WORKER_KEY] = worker;
-        g[WORKER_KEY] = Comlink.wrap<FirestoreWorkerWrapper>(worker);
-    }
+    STATE.engine = options.engine;
+    STATE.dbName = options.dbName || 'firestore.db';
+    STATE.options = options;
 
-    if (!g[INIT_PROMISE_KEY]) {
-        g[INIT_PROMISE_KEY] = (async () => {
-            await ensurePersistentStorage();
-
-            try {
-                await g[WORKER_KEY].init(dbName, g[WASM_URL_KEY]);
-                g[DB_NAME_KEY] = dbName; 
-            } catch (err) {
-                terminateAndReset();
-                throw err;
+    STATE.initPromise = (async () => {
+        try {
+            if (options.engine === 'tauri') {
+                if (!options.tauriDrivers) throw new Error("Tauri drivers required for tauri engine");
+                STATE.backend = createTauriHandler(options.tauriDrivers);
+            } else {
+                if (typeof window !== 'undefined') await ensurePersistentStorage();
+                
+                // 1. Create the worker
+                const worker = new Worker(new URL('./worker.js', import.meta.url), { type: 'module' });
+                
+                // 2. Store the raw reference in our local STATE
+                STATE.rawWorker = worker;
+                
+                // 3. Wrap it with Comlink
+                STATE.backend = Comlink.wrap<any>(worker);
             }
-        })();
-    }
-    return g[INIT_PROMISE_KEY];
+
+            // Initialize the chosen backend
+            await STATE.backend!.init(STATE.dbName, options.wasmUrl);
+        } catch (e) {
+            STATE.initPromise = null; 
+            throw e;
+        }
+    })();
+
+    return STATE.initPromise;
 }
 
 /**
- * Enhanced runSafe: Transparently handles worker crashes.
- * If a crash occurs, it restarts the worker and retries the call.
+ * runSafe: The internal bridge that handles execution and recovery.
+ * It is engine-aware: it recovers WASM crashes but passes through Native errors.
  */
-async function runSafe<T>(task: (api: Comlink.Remote<FirestoreWorkerWrapper>) => Promise<T>, retryCount = 0): Promise<T> {
-    const g = globalThis as any;
+async function runSafe<T>(
+    task: (api: FirestoreBackend) => Promise<T>, 
+    retryCount = 0
+): Promise<T> {
     
-    // Ensure initialized
-    if (!g[INIT_PROMISE_KEY]) await initializeFirestoreSQLite();
-    await g[INIT_PROMISE_KEY];
+    // Auto-init with defaults if called before initializeFirestoreSQLite
+    if (!STATE.initPromise) {
+        await initializeFirestoreSQLite({ engine: 'wa-sqlite' });
+    }
+    await STATE.initPromise;
 
-    const api = g[WORKER_KEY];
+    if (!STATE.backend) throw new Error("Firestore SQLite: Backend not ready.");
+
     try {
-        return await task(api);
+        return await task(STATE.backend);
     } catch (err: any) {
-        const isCrash = err.message?.includes('WASM_ZOMBIE_STATE') || err.name === 'RuntimeError';
-        
-        if (isCrash && retryCount < 2) {
-            console.warn("Worker crash detected. Auto-restarting and retrying...");
-            terminateAndReset();
-            // Wait for re-initialization
-            await initializeFirestoreSQLite();
-            // Retry the same task
+        // Recovery logic only for Web/WASM mode
+        const isWasmCrash = STATE.engine === 'wa-sqlite' && (
+            err.message?.includes('WASM_ZOMBIE_STATE') || 
+            err.name === 'RuntimeError' || 
+            err.message?.includes('unreachable')
+        );
+
+        if (isWasmCrash && retryCount < 2) {
+            console.warn("Firestore SQLite: Worker crash detected. Recovering...");
+            terminateAndReset(); 
+            
+            // Re-init with cached options
+            await initializeFirestoreSQLite({ ...STATE.options!, engine: STATE.engine });
             return await runSafe(task, retryCount + 1);
         }
+
         throw err;
     }
 }
 
+
 // --- Firestore-like API Implementation ---
 
 export const getFirestore = () => {
-    const g = globalThis as any;
-    if (!g[WORKER_KEY] || !g[DB_NAME_KEY]) {
-        throw new Error('Firestore SQLite not initialized! Call initializeFirestoreSQLite() first.');
-    }
-    return { name: g[DB_NAME_KEY] as string };
+    if (!STATE.initPromise) throw new Error('Firestore SQLite not initialized!');
+    return { name: STATE.dbName };
 };
 
 
@@ -606,7 +647,13 @@ export async function uploadBytes(storageRef: StorageReference, data: Blob | Uin
         bytes = data;
     }
 
-    await runSafe(api => api.uploadFile(storageRef.path, Comlink.transfer(bytes, [bytes.buffer]), type));
+    // await runSafe(api => api.uploadFile(storageRef.path, Comlink.transfer(bytes, [bytes.buffer]), type));
+    await runSafe(api => {
+        if (STATE.engine === 'wa-sqlite') {
+            return api.uploadFile(storageRef.path, Comlink.transfer(bytes, [bytes.buffer]), type);
+        }
+        return api.uploadFile(storageRef.path, bytes, type);
+    });
 }
 
 export async function getDownloadURL(storageRef: StorageReference): Promise<string> {
