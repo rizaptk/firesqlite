@@ -21,6 +21,12 @@ const STATE = {
     } | null
 };
 
+
+const dbEvents = mitt<{
+    [collectionPath: string]: void;
+    '*': void;
+}>();
+
 /**
  * Reset internal state and terminate workers.
  * No more globalThis usage.
@@ -173,10 +179,10 @@ export function collectionGroup(_db: any, collectionId: string): CollectionGroup
     return { type: 'collectionGroup', id: collectionId };
 }
 
-const dbEvents = mitt<{
-    [collectionPath: string]: void;
-    '*': void;
-}>();
+// const dbEvents = mitt<{
+//     [collectionPath: string]: void;
+//     '*': void;
+// }>();
 
 export const serverTimestamp = () => {
     return { _methodName: 'serverTimestamp' };
@@ -243,6 +249,30 @@ export async function setDoc(docRef: DocumentReference, data: Record<string, any
     emitChange(docRef.collectionId, docRef.id);
 }
 
+// Helper to handle data that might be stringified or already an object
+function safeParse(data: any) {
+    if (typeof data === 'object' && data !== null) return data;
+    try {
+        return JSON.parse(data);
+    } catch (e) {
+        return {};
+    }
+}
+
+// export async function getDoc(docRef: DocumentReference) {
+//     const rows = await runSafe(async (api) => api.execute(
+//         `SELECT data FROM documents WHERE collection_id = ? AND doc_id = ?`,
+//         [docRef.collectionId, docRef.id]
+//     ));
+//     if (rows.length > 0) {
+//         return {
+//             id: docRef.id,
+//             exists: () => true,
+//             data: () => reviveDates(JSON.parse(rows[0].data))
+//         };
+//     }
+//     return { id: docRef.id, exists: () => false, data: () => undefined };
+// }
 export async function getDoc(docRef: DocumentReference) {
     const rows = await runSafe(async (api) => api.execute(
         `SELECT data FROM documents WHERE collection_id = ? AND doc_id = ?`,
@@ -252,7 +282,8 @@ export async function getDoc(docRef: DocumentReference) {
         return {
             id: docRef.id,
             exists: () => true,
-            data: () => reviveDates(JSON.parse(rows[0].data))
+            // Use safeParse here
+            data: () => reviveDates(safeParse(rows[0].data))
         };
     }
     return { id: docRef.id, exists: () => false, data: () => undefined };
@@ -412,7 +443,8 @@ export async function getDocs(q: Query | CollectionReference | CollectionGroupRe
 
     const docs = rows.map((r: any) => ({
         id: r.doc_id,
-        data: () => reviveDates(JSON.parse(r.data))
+        // data: () => reviveDates(JSON.parse(r.data))
+        data: () => reviveDates(safeParse(r.data))
     }));
 
     return {
