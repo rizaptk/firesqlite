@@ -16,10 +16,16 @@ export const createTauriHandler = (drivers: TauriDrivers): FirestoreBackend => {
     async execute(sql: string, bindings: any[] = []) {
       if (!initialized) throw new Error("DB_NOT_INITIALIZED");
 
-      return await invoke("execute_sql", {
-        sql,
-        bindings
-      });
+      // return await invoke("execute_sql", {
+      //   sql,
+      //   bindings
+      // });
+            // Receive the "Big String"
+      const jsonResult = await invoke<string>("execute_sql", { sql, bindings });
+      
+      // Parse once in JS. This is much faster for thousands of rows 
+      // than receiving a pre-parsed array of Proxies from Tauri.
+      return JSON.parse(jsonResult);
     },
 
     async executeBatch(queries: { sql: string; bindings?: any[] }[]) {
@@ -88,10 +94,7 @@ export const createTauriHandler = (drivers: TauriDrivers): FirestoreBackend => {
 
     async exportDatabaseBinary(): Promise<Uint8Array> {
 
-      const bytes = await invoke<number[]>("export_db_binary", {
-        dbPath: "tokoc-db.db"
-      });
-
+      const bytes = await invoke<number[]>("export_db_binary", { dbPath: "tokoc-db.db" });
       return new Uint8Array(bytes);
     },
 

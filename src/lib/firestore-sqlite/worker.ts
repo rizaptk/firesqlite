@@ -84,7 +84,8 @@ export const workerAPI = {
                     results.push(obj);
                 }
             }
-            return results;
+            // return results;
+            return JSON.stringify(results); 
         } catch (err: any) {
             if (err.name === 'RuntimeError' || err.message?.includes('filename') || err.message?.includes('unreachable')) {
                 throw new Error("WASM_ZOMBIE_STATE");
@@ -96,7 +97,9 @@ export const workerAPI = {
     async execute(sql: string, bindings: any[] = []) {
         const task = () => this._internalExecute(sql, bindings);
         executionQueue = executionQueue.then(task, task);
-        return executionQueue;
+        // return executionQueue;
+        const result = await executionQueue;
+        return JSON.parse(result); 
     },
 
     async executeBatch(queries: { sql: string, bindings?: any[] }[]) {

@@ -563,9 +563,14 @@ export function writeBatch(_db: any) {
         },
         async commit() {
             if (_committed) throw new Error("Batch already committed");
+            if (operations.length === 0) return;
             _committed = true;
 
-            await runSafe(async (api) => api.executeBatch(operations.map(op => ({ sql: op.sql, bindings: op.bindings }))));
+            // await runSafe(async (api) => api.executeBatch(operations.map(op => ({ sql: op.sql, bindings: op.bindings }))));
+
+            await runSafe(async (api) => api.executeBatch(
+                operations.map(op => ({ sql: op.sql, bindings: op.bindings }))
+            ));
 
             const emittedCols = new Set(operations.map(op => op.collectionId));
             emittedCols.forEach(col => dbEvents.emit(col));
